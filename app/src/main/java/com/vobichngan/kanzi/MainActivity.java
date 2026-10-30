@@ -38,7 +38,7 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class MainActivity extends CameraActivity {
-    private static final String APP_VERSION = "0.3.6";
+    private static final String APP_VERSION = "0.3.7";
     private final Handler diagnosticHandler = new Handler(Looper.getMainLooper());
     private int diagnosticAttempts = 0;
     private final Runnable diagnosticRunnable = new Runnable() {
@@ -250,12 +250,33 @@ public class MainActivity extends CameraActivity {
             }
             return;
         }
-        if (uvcCount > 0) {
-            info.append("\nUVC 库已发现设备，正在等待摄像头连接回调。");
+        boolean permission = false;
+        if (systemDevices != null) {
+            for (UsbDevice device : systemDevices.values()) {
+                if (device.getVendorId() == 0xEBA4 && device.getProductId() == 0x6579) {
+                    permission = manager != null && manager.hasPermission(device);
+                }
+            }
+        }
+        boolean cameraOpened = false;
+        try { cameraOpened = isCameraOpened(); } catch (Exception ignored) {}
+        info.append("\\nUSB权限：").append(permission ? "已授予" : "未授予");
+        info.append("\\n预览容器：").append(previewContainer == null ? "未创建" :
+            previewContainer.getWidth() + "×" + previewContainer.getHeight() +
+            "，子视图 " + previewContainer.getChildCount() + " 个");
+        info.append("\\n摄像头状态：").append(cameraOpened ? "已打开" : "未打开");
+        info.append("\\n预览回调：").append(previewCallbackAdded ? "已注册" : "未注册");
+        if (uvcCount > 0 && !permission) {
+            info.append("\\n判断：设备已枚举，但 USB 权限未授予，重点检查授权阶段。");
+        } else if (uvcCount > 0 && permission && !cameraOpened) {
+            info.append("\\n判断：USB 权限已具备，但摄像头未打开，重点检查连接/打开阶段。");
+        } else if (cameraOpened) {
+            info.append("\\n判断：摄像头已打开，继续检查预览数据回调。");
         } else if (systemCount > 0) {
-            info.append("\n安卓能看到 USB 设备，但 UVC 库暂未识别为摄像头。");
+            info.append("\\n判断：安卓已发现设备，UVC 库连接状态仍需确认。");
         }
         diagnostic.setText(info.toString());
+        if (diagnosticAttempts < 15) diagnosticHandler.postDelayed(diagnosticRunnable, 1500);
     }
 
     private void appendDeviceInfo(StringBuilder info, String source, UsbDevice device) {
