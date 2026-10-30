@@ -2,6 +2,10 @@ package com.vobichngan.kanzi;
 
 import android.app.Activity;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.hardware.usb.UsbDevice;
+import android.hardware.usb.UsbManager;
 import android.speech.tts.TextToSpeech;
 import android.view.Gravity;
 import android.view.LayoutInflater;
@@ -29,9 +33,12 @@ import com.google.mlkit.vision.text.TextRecognizer;
 import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions;
 
 import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class MainActivity extends CameraActivity {
+    private static final String APP_VERSION = "0.3.1";
+    private final Handler diagnosticHandler = new Handler(Looper.getMainLooper());
     private FrameLayout previewContainer;
     private TextView status, result;
     private Button startButton, pauseButton;
@@ -65,14 +72,14 @@ public class MainActivity extends CameraActivity {
         root.setBackgroundColor(0xFFF4F6FA);
 
         TextView title = new TextView(this);
-        title.setText("看字助手");
+        title.setText("看字助手  " + APP_VERSION + "（UVC诊断版）");
         title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 26);
         title.setTextColor(0xFF101828);
         title.setTypeface(null, 1);
         root.addView(title, new LinearLayout.LayoutParams(-1, -2));
 
         status = new TextView(this);
-        status.setText("请连接 USB 摄像头；手机弹出 USB 权限提示时，请选择“允许”");
+        status.setText("正在检查 USB 设备…");
         status.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
         status.setTextColor(0xFF344054);
         root.addView(status);
@@ -137,6 +144,7 @@ public class MainActivity extends CameraActivity {
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
+        diagnosticHandler.postDelayed(this::diagnoseUsbDevices, 1800);
         recognizer = TextRecognition.getClient(new ChineseTextRecognizerOptions.Builder().build());
         tts = new TextToSpeech(this, code -> {
             if (code == TextToSpeech.SUCCESS) {
@@ -172,6 +180,26 @@ public class MainActivity extends CameraActivity {
         }
     }
 
+
+    private void diagnoseUsbDevices() {
+        UsbManager manager = (UsbManager) getSystemService(USB_SERVICE);
+        Map<String, UsbDevice> devices = manager == null ? null : manager.getDeviceList();
+        if (devices == null || devices.isEmpty()) {
+            status.setText(APP_VERSION + "：安卓系统未枚举到 USB 设备。请确认 OTG 已开启、摄像头已插好。");
+            return;
+        }
+        StringBuilder info = new StringBuilder(APP_VERSION + "：安卓已检测到 " + devices.size() + " 个 USB 设备：");
+        for (UsbDevice device : devices.values()) {
+            info.append("\\n").append(device.getDeviceName())
+                .append("  VID:").append(String.format(Locale.US, "%04X", device.getVendorId()))
+                .append(" PID:").append(String.format(Locale.US, "%04X", device.getProductId()))
+                .append(" class:").append(device.getDeviceClass())
+                .append("/").append(device.getDeviceSubclass());
+        }
+        info.append("\\n但 UVC 摄像头模块尚未报告连接。请把这段检测结果发给我。");
+        status.setText(info.toString());
+    }
+
     private void onRecognized(Text text) {
         StringBuilder builder = new StringBuilder();
         for (Text.TextBlock block : text.getTextBlocks()) {
@@ -201,6 +229,7 @@ public class MainActivity extends CameraActivity {
         running = false;
         if (tts != null) { tts.stop(); tts.shutdown(); }
         if (recognizer != null) recognizer.close();
+        diagnosticHandler.removeCallbacksAndMessages(null);
         super.onDestroy();
     }
 }
