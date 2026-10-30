@@ -168,8 +168,29 @@ public class MainActivity extends CameraActivity {
             for (UsbDevice device : devices) {
                 if (device.getVendorId() == 0xEBA4 && device.getProductId() == 0x6579) {
                     startupPermissionRequested = true;
-                    status.setText("已发现摄像头，正在主动申请 USB 连接权限…");
-                    requestPermission(device);
+                    try {
+                        // CameraActivity only creates its internal camera entry in onAttachDev().
+                        // Some Android USB monitor versions do not replay onAttachDev for a device
+                        // that was already connected when the monitor registered. In that case,
+                        // requestPermission alone cannot work: onConnectDev finds no camera in
+                        // CameraActivity.mCameraMap. Seed that map with the normal factory first.
+                        java.lang.reflect.Field mapField = CameraActivity.class.getDeclaredField("mCameraMap");
+                        mapField.setAccessible(true);
+                        @SuppressWarnings("unchecked")
+                        Map<Integer, MultiCameraClient.ICamera> cameraMap =
+                            (Map<Integer, MultiCameraClient.ICamera>) mapField.get(this);
+                        if (cameraMap != null && !cameraMap.containsKey(device.getDeviceId())) {
+                            cameraMap.put(device.getDeviceId(), generateCamera(this, device));
+                        }
+                        if (cameraMap == null || !cameraMap.containsKey(device.getDeviceId())) {
+                            throw new IllegalStateException("无法注册 UVC 摄像头对象");
+                        }
+                        status.setText("已补全摄像头对象，正在申请 USB 权限…");
+                        requestPermission(device);
+                    } catch (Exception e) {
+                        status.setText("摄像头初始化失败：" + e.getClass().getSimpleName()
+                            + "；" + (e.getMessage() == null ? "" : e.getMessage()));
+                    }
                     return;
                 }
             }
