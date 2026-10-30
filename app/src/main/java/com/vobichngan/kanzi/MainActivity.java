@@ -38,11 +38,9 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class MainActivity extends CameraActivity {
-    private static final String APP_VERSION = "0.3.2";
+    private static final String APP_VERSION = "0.3.5";
     private final Handler diagnosticHandler = new Handler(Looper.getMainLooper());
     private int diagnosticAttempts = 0;
-    private boolean startupPermissionRequested = false;
-    private int startupPermissionAttempts = 0;
     private final Runnable diagnosticRunnable = new Runnable() {
         @Override public void run() { diagnoseUsbDevices(); }
     };
@@ -149,58 +147,11 @@ public class MainActivity extends CameraActivity {
             .create();
     }
 
-    @Override protected void onResume() {
-        super.onResume();
-        startupPermissionRequested = false;
-        startupPermissionAttempts = 0;
-        diagnosticHandler.postDelayed(this::requestAlreadyAttachedCamera, 800);
-    }
-
-    // USB attach broadcasts may have happened before this app started.
-    // Explicitly request permission for an already-connected camera after
-    // CameraActivity has registered its USB monitor.
-    private void requestAlreadyAttachedCamera() {
-        if (startupPermissionRequested) return;
-        startupPermissionAttempts++;
-        List<UsbDevice> devices = null;
-        try { devices = getDeviceList(); } catch (Exception ignored) { }
-        if (devices != null) {
-            for (UsbDevice device : devices) {
-                if (device.getVendorId() == 0xEBA4 && device.getProductId() == 0x6579) {
-                    startupPermissionRequested = true;
-                    try {
-                        // CameraActivity only creates its internal camera entry in onAttachDev().
-                        // Some Android USB monitor versions do not replay onAttachDev for a device
-                        // that was already connected when the monitor registered. In that case,
-                        // requestPermission alone cannot work: onConnectDev finds no camera in
-                        // CameraActivity.mCameraMap. Seed that map with the normal factory first.
-                        java.lang.reflect.Field mapField = CameraActivity.class.getDeclaredField("mCameraMap");
-                        mapField.setAccessible(true);
-                        @SuppressWarnings("unchecked")
-                        Map<Integer, MultiCameraClient.ICamera> cameraMap =
-                            (Map<Integer, MultiCameraClient.ICamera>) mapField.get(this);
-                        if (cameraMap != null && !cameraMap.containsKey(device.getDeviceId())) {
-                            cameraMap.put(device.getDeviceId(), generateCamera(this, device));
-                        }
-                        if (cameraMap == null || !cameraMap.containsKey(device.getDeviceId())) {
-                            throw new IllegalStateException("无法注册 UVC 摄像头对象");
-                        }
-                        status.setText("已补全摄像头对象，正在申请 USB 权限…");
-                        requestPermission(device);
-                    } catch (Exception e) {
-                        status.setText("摄像头初始化失败：" + e.getClass().getSimpleName()
-                            + "；" + (e.getMessage() == null ? "" : e.getMessage()));
-                    }
-                    return;
-                }
-            }
-        }
-        if (startupPermissionAttempts < 12) {
-            diagnosticHandler.postDelayed(this::requestAlreadyAttachedCamera, 500);
-        } else {
-            status.setText("已检测到 USB 设备，但尚未完成摄像头连接。请拔插摄像头后重试。");
-        }
-    }
+    // CameraActivity owns the complete USB lifecycle. When its preview
+    // surface becomes available it registers the USB monitor, creates the
+    // camera entry in onAttachDev(), requests permission for getDefaultCamera(),
+    // and opens the camera from onConnectDev(). Do not manually seed its map
+    // or request permission outside that lifecycle.
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
