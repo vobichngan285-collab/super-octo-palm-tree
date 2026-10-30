@@ -2,7 +2,7 @@ plugins { id 'com.android.application' }
 
 android {
     namespace 'com.vobichngan.kanzi'
-    compileSdk 35
+    compileSdk 36
     defaultConfig {
         applicationId 'com.vobichngan.kanzi'
         minSdk 26
