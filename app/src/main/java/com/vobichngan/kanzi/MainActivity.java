@@ -38,14 +38,14 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class MainActivity extends CameraActivity {
-    private static final String APP_VERSION = "0.3.5";
+    private static final String APP_VERSION = "0.3.6";
     private final Handler diagnosticHandler = new Handler(Looper.getMainLooper());
     private int diagnosticAttempts = 0;
     private final Runnable diagnosticRunnable = new Runnable() {
         @Override public void run() { diagnoseUsbDevices(); }
     };
     private FrameLayout previewContainer;
-    private TextView status, result;
+    private TextView status, diagnostic, result;
     private Button startButton, pauseButton;
     private TextToSpeech tts;
     private TextRecognizer recognizer;
@@ -88,6 +88,12 @@ public class MainActivity extends CameraActivity {
         status.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
         status.setTextColor(0xFF344054);
         root.addView(status);
+
+        diagnostic = new TextView(this);
+        diagnostic.setText("USB 设备诊断信息正在加载…");
+        diagnostic.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        diagnostic.setTextColor(0xFF475467);
+        root.addView(diagnostic);
 
         previewContainer = new FrameLayout(this);
         previewContainer.setBackgroundColor(Color.BLACK);
@@ -216,7 +222,7 @@ public class MainActivity extends CameraActivity {
             // CameraActivity registers its USB monitor after the preview surface is ready.
             uvcDevices = getDeviceList();
         } catch (Exception e) {
-            status.setText(APP_VERSION + "：UVC 设备列表读取异常：" + e.getClass().getSimpleName());
+            diagnostic.setText(APP_VERSION + "：UVC 设备列表读取异常：" + e.getClass().getSimpleName());
             return;
         }
 
@@ -236,11 +242,11 @@ public class MainActivity extends CameraActivity {
 
         if (systemCount == 0 && uvcCount <= 0) {
             info.append("\n暂时没有读到设备。正在等待 USB 监控初始化/设备插入…");
-            status.setText(info.toString());
+            diagnostic.setText(info.toString());
             if (diagnosticAttempts < 15) {
                 diagnosticHandler.postDelayed(diagnosticRunnable, 1000);
             } else {
-                status.setText(info.append("\n等待 15 秒后仍无设备。请把此结果发给我。").toString());
+                diagnostic.setText(info.append("\n等待 15 秒后仍无设备。请把此结果发给我。").toString());
             }
             return;
         }
@@ -249,7 +255,7 @@ public class MainActivity extends CameraActivity {
         } else if (systemCount > 0) {
             info.append("\n安卓能看到 USB 设备，但 UVC 库暂未识别为摄像头。");
         }
-        status.setText(info.toString());
+        diagnostic.setText(info.toString());
     }
 
     private void appendDeviceInfo(StringBuilder info, String source, UsbDevice device) {
