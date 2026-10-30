@@ -34,11 +34,16 @@ import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions;
 
 import java.util.Locale;
 import java.util.Map;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class MainActivity extends CameraActivity {
     private static final String APP_VERSION = "0.3.1";
     private final Handler diagnosticHandler = new Handler(Looper.getMainLooper());
+    private int diagnosticAttempts = 0;
+    private final Runnable diagnosticRunnable = new Runnable() {
+        @Override public void run() { diagnoseUsbDevices(); }
+    };
     private FrameLayout previewContainer;
     private TextView status, result;
     private Button startButton, pauseButton;
@@ -144,7 +149,8 @@ public class MainActivity extends CameraActivity {
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
-        diagnosticHandler.postDelayed(this::diagnoseUsbDevices, 1800);
+        diagnosticAttempts = 0;
+        diagnosticHandler.postDelayed(diagnosticRunnable, 1200);
         recognizer = TextRecognition.getClient(new ChineseTextRecognizerOptions.Builder().build());
         tts = new TextToSpeech(this, code -> {
             if (code == TextToSpeech.SUCCESS) {
@@ -182,22 +188,57 @@ public class MainActivity extends CameraActivity {
 
 
     private void diagnoseUsbDevices() {
+        diagnosticAttempts++;
         UsbManager manager = (UsbManager) getSystemService(USB_SERVICE);
-        Map<String, UsbDevice> devices = manager == null ? null : manager.getDeviceList();
-        if (devices == null || devices.isEmpty()) {
-            status.setText(APP_VERSION + "：安卓系统未枚举到 USB 设备。请确认 OTG 已开启、摄像头已插好。");
+        Map<String, UsbDevice> systemDevices = manager == null ? null : manager.getDeviceList();
+        List<UsbDevice> uvcDevices = null;
+        try {
+            // CameraActivity registers its USB monitor after the preview surface is ready.
+            uvcDevices = getDeviceList();
+        } catch (Exception e) {
+            status.setText(APP_VERSION + "：UVC 设备列表读取异常：" + e.getClass().getSimpleName());
             return;
         }
-        StringBuilder info = new StringBuilder(APP_VERSION + "：安卓已检测到 " + devices.size() + " 个 USB 设备：");
-        for (UsbDevice device : devices.values()) {
-            info.append("\\n").append(device.getDeviceName())
-                .append("  VID:").append(String.format(Locale.US, "%04X", device.getVendorId()))
-                .append(" PID:").append(String.format(Locale.US, "%04X", device.getProductId()))
-                .append(" class:").append(device.getDeviceClass())
-                .append("/").append(device.getDeviceSubclass());
+
+        int systemCount = systemDevices == null ? 0 : systemDevices.size();
+        int uvcCount = uvcDevices == null ? -1 : uvcDevices.size();
+        StringBuilder info = new StringBuilder(APP_VERSION)
+            .append("：安卓 USB 设备 ").append(systemCount)
+            .append(" 个；UVC 库设备列表 ")
+            .append(uvcCount < 0 ? "尚未初始化" : uvcCount + " 个");
+
+        if (systemDevices != null) {
+            for (UsbDevice device : systemDevices.values()) appendDeviceInfo(info, "安卓", device);
         }
-        info.append("\\n但 UVC 摄像头模块尚未报告连接。请把这段检测结果发给我。");
+        if (uvcDevices != null) {
+            for (UsbDevice device : uvcDevices) appendDeviceInfo(info, "UVC", device);
+        }
+
+        if (systemCount == 0 && uvcCount <= 0) {
+            info.append("\n暂时没有读到设备。正在等待 USB 监控初始化/设备插入…");
+            status.setText(info.toString());
+            if (diagnosticAttempts < 15) {
+                diagnosticHandler.postDelayed(diagnosticRunnable, 1000);
+            } else {
+                status.setText(info.append("\n等待 15 秒后仍无设备。请把此结果发给我。").toString());
+            }
+            return;
+        }
+        if (uvcCount > 0) {
+            info.append("\nUVC 库已发现设备，正在等待摄像头连接回调。");
+        } else if (systemCount > 0) {
+            info.append("\n安卓能看到 USB 设备，但 UVC 库暂未识别为摄像头。");
+        }
         status.setText(info.toString());
+    }
+
+    private void appendDeviceInfo(StringBuilder info, String source, UsbDevice device) {
+        info.append("\n[").append(source).append("] ")
+            .append(device.getDeviceName())
+            .append(" VID:").append(String.format(Locale.US, "%04X", device.getVendorId()))
+            .append(" PID:").append(String.format(Locale.US, "%04X", device.getProductId()))
+            .append(" class:").append(device.getDeviceClass())
+            .append("/").append(device.getDeviceSubclass());
     }
 
     private void onRecognized(Text text) {
