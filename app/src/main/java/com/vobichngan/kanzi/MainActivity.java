@@ -1,162 +1,206 @@
 package com.vobichngan.kanzi;
 
-import android.Manifest;
 import android.app.Activity;
-import android.content.Context;
-import android.content.pm.PackageManager;
-import android.graphics.SurfaceTexture;
-import android.hardware.camera2.*;
-import android.media.Image;
-import android.media.ImageReader;
-import android.os.*;
+import android.os.Bundle;
 import android.speech.tts.TextToSpeech;
-import android.util.Size;
-import android.view.*;
-import android.widget.*;
-import androidx.annotation.NonNull;
-import androidx.core.app.ActivityCompat;
-import androidx.core.content.ContextCompat;
+import android.view.Gravity;
+import android.view.LayoutInflater;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.Button;
+import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.TextView;
+import android.graphics.Color;
+import android.util.TypedValue;
+
+import com.jiangdg.ausbc.MultiCameraClient;
+import com.jiangdg.ausbc.base.CameraActivity;
+import com.jiangdg.ausbc.camera.bean.CameraRequest;
+import com.jiangdg.ausbc.callback.ICameraStateCallBack;
+import com.jiangdg.ausbc.callback.IPreviewDataCallBack;
+import com.jiangdg.ausbc.widget.AspectRatioTextureView;
+import com.jiangdg.ausbc.widget.IAspectRatio;
 import com.google.mlkit.vision.common.InputImage;
 import com.google.mlkit.vision.text.Text;
-import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions;
 import com.google.mlkit.vision.text.TextRecognition;
 import com.google.mlkit.vision.text.TextRecognizer;
-import java.util.*;
+import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions;
+
+import java.util.Locale;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-public class MainActivity extends Activity implements TextureView.SurfaceTextureListener {
-    private TextureView preview;
+public class MainActivity extends CameraActivity {
+    private FrameLayout previewContainer;
     private TextView status, result;
     private Button startButton, pauseButton;
-    private CameraDevice camera;
-    private CameraCaptureSession session;
-    private ImageReader reader;
-    private HandlerThread cameraThread;
-    private Handler cameraHandler;
-    private TextRecognizer recognizer;
     private TextToSpeech tts;
-    private boolean running = false, processing = false, ttsReady = false;
+    private TextRecognizer recognizer;
+    private boolean running = false;
+    private boolean ttsReady = false;
+    private boolean previewCallbackAdded = false;
     private String lastSpoken = "";
     private long lastProcess = 0;
     private final AtomicBoolean busy = new AtomicBoolean(false);
-    private static final int REQ_CAMERA = 10;
 
-    @Override public void onCreate(Bundle b) {
-        super.onCreate(b);
-        getWindow().getDecorView().setSystemUiVisibility(0);
-        buildUi();
+    private final IPreviewDataCallBack previewCallback = new IPreviewDataCallBack() {
+        @Override public void onPreviewData(byte[] data, int width, int height, DataFormat format) {
+            if (!running || data == null || format != DataFormat.NV21) return;
+            long now = System.currentTimeMillis();
+            if (now - lastProcess < 900 || !busy.compareAndSet(false, true)) return;
+            lastProcess = now;
+            byte[] frame = data.clone();
+            InputImage image = InputImage.fromByteArray(frame, width, height, 0, InputImage.IMAGE_FORMAT_NV21);
+            recognizer.process(image)
+                .addOnSuccessListener(MainActivity.this::onRecognized)
+                .addOnCompleteListener(task -> busy.set(false));
+        }
+    };
+
+    @Override protected View getRootView(LayoutInflater inflater) {
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(dp(16), dp(12), dp(16), dp(12));
+        root.setBackgroundColor(0xFFF4F6FA);
+
+        TextView title = new TextView(this);
+        title.setText("看字助手");
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 26);
+        title.setTextColor(0xFF101828);
+        title.setTypeface(null, 1);
+        root.addView(title, new LinearLayout.LayoutParams(-1, -2));
+
+        status = new TextView(this);
+        status.setText("请连接 USB 摄像头；手机弹出 USB 权限提示时，请选择“允许”");
+        status.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
+        status.setTextColor(0xFF344054);
+        root.addView(status);
+
+        previewContainer = new FrameLayout(this);
+        previewContainer.setBackgroundColor(Color.BLACK);
+        LinearLayout.LayoutParams previewParams = new LinearLayout.LayoutParams(-1, 0, 1);
+        previewParams.topMargin = dp(10);
+        previewParams.bottomMargin = dp(10);
+        root.addView(previewContainer, previewParams);
+
+        LinearLayout buttons = new LinearLayout(this);
+        buttons.setOrientation(LinearLayout.HORIZONTAL);
+        startButton = new Button(this);
+        startButton.setText("开始识别");
+        buttons.addView(startButton, new LinearLayout.LayoutParams(0, -2, 1));
+        pauseButton = new Button(this);
+        pauseButton.setText("暂停朗读");
+        buttons.addView(pauseButton, new LinearLayout.LayoutParams(0, -2, 1));
+        root.addView(buttons);
+
+        TextView label = new TextView(this);
+        label.setText("识别到的文字");
+        label.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
+        label.setTypeface(null, 1);
+        label.setTextColor(0xFF101828);
+        root.addView(label);
+
+        ScrollView scroll = new ScrollView(this);
+        result = new TextView(this);
+        result.setText("识别结果会显示在这里");
+        result.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
+        result.setTextColor(0xFF101828);
+        result.setPadding(dp(4), dp(8), dp(4), dp(8));
+        scroll.addView(result);
+        root.addView(scroll, new LinearLayout.LayoutParams(-1, dp(145)));
+        return root;
+    }
+
+    @Override protected IAspectRatio getCameraView() {
+        return new AspectRatioTextureView(this);
+    }
+
+    @Override protected ViewGroup getCameraViewContainer() {
+        return previewContainer;
+    }
+
+    @Override protected int getGravity() {
+        return Gravity.CENTER;
+    }
+
+    @Override protected CameraRequest getCameraRequest() {
+        return new CameraRequest.Builder()
+            .setPreviewWidth(1280)
+            .setPreviewHeight(720)
+            .setRenderMode(CameraRequest.RenderMode.OPENGL)
+            .setPreviewFormat(CameraRequest.PreviewFormat.FORMAT_MJPEG)
+            .setRawPreviewData(true)
+            .setAspectRatioShow(true)
+            .create();
+    }
+
+    @Override public void onCreate(Bundle state) {
+        super.onCreate(state);
         recognizer = TextRecognition.getClient(new ChineseTextRecognizerOptions.Builder().build());
         tts = new TextToSpeech(this, code -> {
             if (code == TextToSpeech.SUCCESS) {
-                int r = tts.setLanguage(Locale.SIMPLIFIED_CHINESE);
-                ttsReady = r != TextToSpeech.LANG_MISSING_DATA && r != TextToSpeech.LANG_NOT_SUPPORTED;
+                int language = tts.setLanguage(Locale.SIMPLIFIED_CHINESE);
+                ttsReady = language != TextToSpeech.LANG_MISSING_DATA && language != TextToSpeech.LANG_NOT_SUPPORTED;
                 if (!ttsReady) status.setText("系统没有可用的中文语音，请先安装中文语音包");
             }
         });
-        cameraThread = new HandlerThread("uvc-camera"); cameraThread.start();
-        cameraHandler = new Handler(cameraThread.getLooper());
-        preview.setSurfaceTextureListener(this);
-        startButton.setOnClickListener(v -> startReading());
-        pauseButton.setOnClickListener(v -> stopReading());
+        startButton.setOnClickListener(v -> {
+            running = true;
+            lastSpoken = "";
+            status.setText(previewCallbackAdded ? "正在识别并朗读新出现的中文文字" : "正在等待 USB 摄像头连接…");
+        });
+        pauseButton.setOnClickListener(v -> {
+            running = false;
+            if (tts != null) tts.stop();
+            status.setText("已暂停朗读和识别");
+        });
     }
 
-    private void buildUi() {
-        LinearLayout root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(20,16,20,12); root.setBackgroundColor(0xFFF4F6FA);
-        TextView title = new TextView(this); title.setText("看字助手"); title.setTextSize(26); title.setTextColor(0xFF101828); title.setTypeface(null,1);
-        root.addView(title, new LinearLayout.LayoutParams(-1,-2));
-        status = new TextView(this); status.setText("连接 USB 摄像头后，点击“开始识别”"); status.setTextSize(17); status.setTextColor(0xFF344054);
-        root.addView(status);
-        preview = new TextureView(this); preview.setSurfaceTextureListener(this);
-        LinearLayout.LayoutParams pp = new LinearLayout.LayoutParams(-1,0,1); pp.topMargin=12; pp.bottomMargin=12; root.addView(preview,pp);
-        LinearLayout buttons = new LinearLayout(this); buttons.setOrientation(LinearLayout.HORIZONTAL);
-        startButton = new Button(this); startButton.setText("开始识别"); buttons.addView(startButton,new LinearLayout.LayoutParams(0,-2,1));
-        pauseButton = new Button(this); pauseButton.setText("暂停朗读"); buttons.addView(pauseButton,new LinearLayout.LayoutParams(0,-2,1));
-        root.addView(buttons);
-        TextView label = new TextView(this); label.setText("识别到的文字"); label.setTextSize(18); label.setTypeface(null,1); label.setTextColor(0xFF101828); root.addView(label);
-        ScrollView scroll = new ScrollView(this); result = new TextView(this); result.setText("识别结果会显示在这里"); result.setTextSize(20); result.setTextColor(0xFF101828); result.setPadding(4,8,4,8); scroll.addView(result);
-        root.addView(scroll,new LinearLayout.LayoutParams(-1,dp(150)));
-        setContentView(root);
-    }
-    private int dp(int v){ return (int)(v*getResources().getDisplayMetrics().density); }
-
-    private void startReading() {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(this,new String[]{Manifest.permission.CAMERA},REQ_CAMERA); return;
-        }
-        running=true; lastSpoken=""; status.setText("正在寻找 USB 摄像头…");
-        if (preview.isAvailable()) openExternalCamera(preview.getSurfaceTexture());
-    }
-    private void stopReading() {
-        running=false; status.setText("已暂停"); if(tts!=null) tts.stop();
-        closeCamera();
-    }
-    @Override public void onRequestPermissionsResult(int requestCode,@NonNull String[] p,@NonNull int[] g) {
-        super.onRequestPermissionsResult(requestCode,p,g); if(requestCode==REQ_CAMERA && g.length>0 && g[0]==PackageManager.PERMISSION_GRANTED) startReading();
-    }
-    private void openExternalCamera(SurfaceTexture texture) {
-        try {
-            CameraManager manager=(CameraManager)getSystemService(Context.CAMERA_SERVICE);
-            String selected=null;
-            for(String id:manager.getCameraIdList()) {
-                CameraCharacteristics c=manager.getCameraCharacteristics(id);
-                Integer facing=c.get(CameraCharacteristics.LENS_FACING);
-                if(facing!=null && facing==CameraCharacteristics.LENS_FACING_EXTERNAL){selected=id;break;}
+    @Override public void onCameraState(MultiCameraClient.ICamera self, ICameraStateCallBack.State code, String msg) {
+        if (code == ICameraStateCallBack.State.OPENED) {
+            if (!previewCallbackAdded) {
+                addPreviewDataCallBack(previewCallback);
+                previewCallbackAdded = true;
             }
-            if(selected==null){status.setText("系统未向应用提供 USB 摄像头。请确认手机支持 UVC 外接摄像头；如果 USB 摄像头 App 能用但这里找不到，需切换专用 UVC 接入方案。");return;}
-            CameraCharacteristics chars=manager.getCameraCharacteristics(selected);
-            Size[] sizes=chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP).getOutputSizes(android.graphics.SurfaceTexture.class);
-            Size size=(sizes!=null&&sizes.length>0)?sizes[0]:new Size(1280,720);
-            texture.setDefaultBufferSize(size.getWidth(),size.getHeight());
-            reader=ImageReader.newInstance(1280,720,android.graphics.ImageFormat.YUV_420_888,2);
-            reader.setOnImageAvailableListener(r -> {
-                Image image=null;
-                try {
-                    image=r.acquireLatestImage();
-                    if(image==null||!running||!busy.compareAndSet(false,true)) return;
-                    long now=System.currentTimeMillis(); if(now-lastProcess<850){busy.set(false);return;} lastProcess=now;
-                    Image finalImage=image;
-                    InputImage input=InputImage.fromMediaImage(finalImage,0);
-                    recognizer.process(input).addOnSuccessListener(this::onRecognized)
-                      .addOnCompleteListener(task->{finalImage.close();busy.set(false);});
-                    image=null;
-                } catch(Exception e){ if(image!=null) image.close(); busy.set(false); }
-            },cameraHandler);
-            manager.openCamera(selected,new CameraDevice.StateCallback(){
-                @Override public void onOpened(@NonNull CameraDevice c){
-                    camera=c; try{
-                        Surface previewSurface=new Surface(texture); Surface ocrSurface=reader.getSurface();
-                        CaptureRequest.Builder request=c.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
-                        request.addTarget(previewSurface); request.addTarget(ocrSurface);
-                        c.createCaptureSession(Arrays.asList(previewSurface,ocrSurface),new CameraCaptureSession.StateCallback(){
-                            @Override public void onConfigured(@NonNull CameraCaptureSession s){session=s;try{s.setRepeatingRequest(request.build(),null,cameraHandler);runOnUiThread(()->status.setText("USB 摄像头已连接，正在识别中文文字"));}catch(Exception e){showError("摄像头启动失败："+e.getMessage());}}
-                            @Override public void onConfigureFailed(@NonNull CameraCaptureSession s){showError("摄像头预览配置失败");}
-                        },cameraHandler);
-                    }catch(Exception e){showError("无法启动摄像头："+e.getMessage());}
-                }
-                @Override public void onDisconnected(@NonNull CameraDevice c){c.close();camera=null;showError("USB 摄像头已断开");}
-                @Override public void onError(@NonNull CameraDevice c,int error){c.close();camera=null;showError("摄像头错误："+error);}
-            },cameraHandler);
-        }catch(Exception e){showError("打开摄像头失败："+e.getMessage());}
-    }
-    private void onRecognized(Text text) {
-        StringBuilder sb=new StringBuilder();
-        for(Text.TextBlock block:text.getTextBlocks()){String s=block.getText().trim();if(!s.isEmpty()){if(sb.length()>0)sb.append("\n");sb.append(s);}}
-        String found=sb.toString().trim(); if(found.isEmpty())return;
-        runOnUiThread(()->result.setText(found));
-        String normalized=found.replaceAll("\\s+","");
-        if(running && ttsReady && normalized.length()>1 && !normalized.equals(lastSpoken)){
-            lastSpoken=normalized;
-            runOnUiThread(()->{if(running)tts.speak(found,TextToSpeech.QUEUE_ADD,null,"ocr-"+System.currentTimeMillis());});
+            runOnUiThread(() -> status.setText("USB 摄像头已连接。点击“开始识别”"));
+        } else if (code == ICameraStateCallBack.State.CLOSED) {
+            previewCallbackAdded = false;
+            runOnUiThread(() -> status.setText("USB 摄像头已断开"));
+        } else if (code == ICameraStateCallBack.State.ERROR) {
+            runOnUiThread(() -> status.setText("USB 摄像头启动失败：" + (msg == null ? "请重新插拔摄像头" : msg)));
         }
     }
-    private void showError(String message){runOnUiThread(()->status.setText(message));}
-    private void closeCamera(){
-        try{if(session!=null){session.close();session=null;}if(camera!=null){camera.close();camera=null;}if(reader!=null){reader.close();reader=null;}}catch(Exception ignored){}
+
+    private void onRecognized(Text text) {
+        StringBuilder builder = new StringBuilder();
+        for (Text.TextBlock block : text.getTextBlocks()) {
+            String value = block.getText().trim();
+            if (!value.isEmpty()) {
+                if (builder.length() > 0) builder.append("\n");
+                builder.append(value);
+            }
+        }
+        String found = builder.toString().trim();
+        if (found.isEmpty()) return;
+        runOnUiThread(() -> result.setText(found));
+        String normalized = found.replaceAll("\\s+", "");
+        if (running && ttsReady && normalized.length() > 1 && !normalized.equals(lastSpoken)) {
+            lastSpoken = normalized;
+            runOnUiThread(() -> {
+                if (running) tts.speak(found, TextToSpeech.QUEUE_ADD, null, "ocr-" + System.currentTimeMillis());
+            });
+        }
     }
-    @Override public void onSurfaceTextureAvailable(@NonNull SurfaceTexture st,int w,int h){if(running)openExternalCamera(st);}
-    @Override public void onSurfaceTextureSizeChanged(@NonNull SurfaceTexture st,int w,int h){}
-    @Override public boolean onSurfaceTextureDestroyed(@NonNull SurfaceTexture st){closeCamera();return true;}
-    @Override public void onSurfaceTextureUpdated(@NonNull SurfaceTexture st){}
-    @Override protected void onDestroy(){stopReading();if(recognizer!=null)recognizer.close();if(tts!=null)tts.shutdown();if(cameraThread!=null)cameraThread.quitSafely();super.onDestroy();}
+
+    private int dp(int value) {
+        return (int) (value * getResources().getDisplayMetrics().density);
+    }
+
+    @Override protected void onDestroy() {
+        running = false;
+        if (tts != null) { tts.stop(); tts.shutdown(); }
+        if (recognizer != null) recognizer.close();
+        super.onDestroy();
+    }
 }
