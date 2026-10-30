@@ -20,5 +20,5 @@ configurations.configureEach {
 dependencies {
     implementation 'androidx.appcompat:appcompat:1.7.0'
     implementation 'com.google.mlkit:text-recognition-chinese:16.0.1'
-    implementation 'com.github.ernestp.AndroidUSBCamera:libausbc:v3.6.0'
+    implementation 'com.github.ernestp.AndroidUSBCamera:libausbc:3.6.0'
 }
