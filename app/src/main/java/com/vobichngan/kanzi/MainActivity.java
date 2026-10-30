@@ -38,9 +38,11 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class MainActivity extends CameraActivity {
-    private static final String APP_VERSION = "0.3.1";
+    private static final String APP_VERSION = "0.3.2";
     private final Handler diagnosticHandler = new Handler(Looper.getMainLooper());
     private int diagnosticAttempts = 0;
+    private boolean startupPermissionRequested = false;
+    private int startupPermissionAttempts = 0;
     private final Runnable diagnosticRunnable = new Runnable() {
         @Override public void run() { diagnoseUsbDevices(); }
     };
@@ -145,6 +147,38 @@ public class MainActivity extends CameraActivity {
             .setRawPreviewData(true)
             .setAspectRatioShow(true)
             .create();
+    }
+
+    @Override protected void onResume() {
+        super.onResume();
+        startupPermissionRequested = false;
+        startupPermissionAttempts = 0;
+        diagnosticHandler.postDelayed(this::requestAlreadyAttachedCamera, 800);
+    }
+
+    // USB attach broadcasts may have happened before this app started.
+    // Explicitly request permission for an already-connected camera after
+    // CameraActivity has registered its USB monitor.
+    private void requestAlreadyAttachedCamera() {
+        if (startupPermissionRequested) return;
+        startupPermissionAttempts++;
+        List<UsbDevice> devices = null;
+        try { devices = getDeviceList(); } catch (Exception ignored) { }
+        if (devices != null) {
+            for (UsbDevice device : devices) {
+                if (device.getVendorId() == 0xEBA4 && device.getProductId() == 0x6579) {
+                    startupPermissionRequested = true;
+                    status.setText("已发现摄像头，正在主动申请 USB 连接权限…");
+                    requestPermission(device);
+                    return;
+                }
+            }
+        }
+        if (startupPermissionAttempts < 12) {
+            diagnosticHandler.postDelayed(this::requestAlreadyAttachedCamera, 500);
+        } else {
+            status.setText("已检测到 USB 设备，但尚未完成摄像头连接。请拔插摄像头后重试。");
+        }
     }
 
     @Override public void onCreate(Bundle state) {
