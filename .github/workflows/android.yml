@@ -23,22 +23,11 @@ jobs:
           gradle-version: '8.11.1'
       - name: Build debug APK
         run: gradle --no-daemon assembleDebug
-      - name: Sign APK with stable release key
-        env:
-          KEYSTORE_BASE64: ${{ secrets.KANZI_KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.KANZI_KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KANZI_KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KANZI_KEY_PASSWORD }}
-        run: |
-          echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/kanzi-release.jks"
-          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n 1)"
-          "$APKSIGNER" sign --ks "$RUNNER_TEMP/kanzi-release.jks" --ks-key-alias "$KEY_ALIAS" --ks-pass env:KEYSTORE_PASSWORD --key-pass env:KEY_PASSWORD --out app/build/outputs/apk/debug/app-debug-signed.apk app/build/outputs/apk/debug/app-debug.apk
-          "$APKSIGNER" verify --verbose --print-certs app/build/outputs/apk/debug/app-debug-signed.apk
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: kanzi-assistant-signed-apk
-          path: app/build/outputs/apk/debug/app-debug-signed.apk
+          name: kanzi-assistant-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
       - name: Publish public test download
@@ -47,4 +36,4 @@ jobs:
           tag_name: test-build-${{ github.run_number }}
           name: 看字助手测试版 ${{ github.run_number }}
           prerelease: true
-          files: app/build/outputs/apk/debug/app-debug-signed.apk
+          files: app/build/outputs/apk/debug/app-debug.apk
