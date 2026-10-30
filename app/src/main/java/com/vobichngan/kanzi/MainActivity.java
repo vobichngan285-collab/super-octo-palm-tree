@@ -171,6 +171,20 @@ public class MainActivity extends CameraActivity {
         });
     }
 
+    // Prefer the camera reported by the user's phone diagnostics.
+    @Override protected UsbDevice getDefaultCamera() {
+        UsbManager manager = (UsbManager) getSystemService(USB_SERVICE);
+        if (manager == null) return null;
+        Map<String, UsbDevice> devices = manager.getDeviceList();
+        if (devices == null) return null;
+        for (UsbDevice device : devices.values()) {
+            if (device.getVendorId() == 0xEBA4 && device.getProductId() == 0x6579) {
+                return device;
+            }
+        }
+        return null;
+    }
+
     @Override public void onCameraState(MultiCameraClient.ICamera self, ICameraStateCallBack.State code, String msg) {
         if (code == ICameraStateCallBack.State.OPENED) {
             if (!previewCallbackAdded) {
@@ -238,7 +252,16 @@ public class MainActivity extends CameraActivity {
             .append(" VID:").append(String.format(Locale.US, "%04X", device.getVendorId()))
             .append(" PID:").append(String.format(Locale.US, "%04X", device.getProductId()))
             .append(" class:").append(device.getDeviceClass())
-            .append("/").append(device.getDeviceSubclass());
+            .append("/").append(device.getDeviceSubclass())
+            .append(" interfaces:").append(device.getInterfaceCount());
+        for (int i = 0; i < device.getInterfaceCount(); i++) {
+            android.hardware.usb.UsbInterface intf = device.getInterface(i);
+            info.append(" [").append(i)
+                .append(":class=").append(intf.getInterfaceClass())
+                .append(",sub=").append(intf.getInterfaceSubclass())
+                .append(",proto=").append(intf.getInterfaceProtocol())
+                .append(",eps=").append(intf.getEndpointCount()).append("]");
+        }
     }
 
     private void onRecognized(Text text) {
